@@ -1,0 +1,121 @@
+import sys
+import random
+import time
+from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel
+from PySide6.QtCore import QThread, Signal
+import pyqtgraph as pg
+
+# --- 1. BAKGRUNNSTRÅD FOR DATAHENTING ---
+class DataFetcherWorker(QThread):
+    # Signal som sender en liste med verdier (f.eks. [kanal1, kanal2, kanal3]) til hovedtråden
+    data_received = Signal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.is_running = True
+
+    def run(self):
+        """Denne metoden kjører kontinuerlig i bakgrunnen."""
+        while self.is_running:
+            try:
+                # --- HER HENTER DU DATA FRA DITT EKSTERNE STED ---
+                # Eksempel 1: Hente fra et REST-API
+                # response = requests.get("https://api.din-sensor-server.no/data", timeout=2)
+                # payload = response.json()
+                # new_data = [payload['temp'], payload['trykk'], payload['fuktighet']]
+
+                # Simulering av henteprosedyre / nettverksforsinkelse:
+                time.sleep(0.1)  # Henter data hver 100. millisekund
+                new_data = [
+                    random.uniform(10, 20),
+                    random.uniform(50, 60),
+                    random.uniform(100, 110)
+                ]
+
+                # Send dataene trygt over til GUI-tråden
+                self.data_received.emit(new_data)
+
+            except Exception as e:
+                print(f"Feil under datahenting: {e}")
+                time.sleep(1)  # Vent litt før nytt forsøk ved feil
+
+    def stop(self):
+        self.is_running = False
+        self.wait()
+
+# --- 2. HOVEDVINDU (GUI) ---
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Flere sensorer - Ekstern datahenting")
+        self.resize(800, 600)
+
+        # Hoved-widget og layout
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+
+        # Statuslinje/Tittel
+        self.status_label = QLabel("Kobler til datakilde...")
+        layout.addWidget(self.status_label)
+
+        # Opprett Pyqtgraph PlotWidget
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.showGrid(x=True, y=True)
+        self.plot_widget.addLegend()
+        layout.addWidget(self.plot_widget)
+
+        # Datalagring for 3 kanaler
+        self.max_points = 200
+        self.y_data = [[], [], []]
+        self.x_data = []
+        self.counter = 0
+
+        # Opprett grafer/linjer
+        colors = ['r', 'g', 'b']
+        names = ["Kanal 1 (f.eks. Temp)", "Kanal 2 (f.eks. Trykk)", "Kanal 3 (f.eks. Fukt)"]
+        self.curves = []
+
+        for i in range(3):
+            curve = self.plot_widget.plot(
+                pen=pg.mkPen(color=colors[i], width=2),
+                name=names[i]
+            )
+            self.curves.append(curve)
+
+        # --- OPPRETT OG START BAKGRUNNSTRÅDEN ---
+        self.worker = DataFetcherWorker()
+        self.worker.data_received.connect(self.update_plots)  # Koble signalet til oppdateringsfunksjonen
+        self.worker.start()
+
+    def update_plots(self, new_values):
+        """Mottar nye data fra bakgrunnstråden og oppdaterer grafene."""
+        self.counter += 1
+        self.x_data.append(self.counter)
+
+        # Begrens antall punkter på x-aksen (rullende vindu)
+        if len(self.x_data) > self.max_points:
+            self.x_data.pop(0)
+
+        # Legg til nye verdier for hver kanal
+        for i in range(3):
+            self.y_data[i].append(new_values[i])
+            if len(self.y_data[i]) > self.max_points:
+                self.y_data[i].pop(0)
+
+            # Oppdater grafen
+            self.curves[i].setData(self.x_data, self.y_data[i])
+
+        self.status_label.setText(f"Siste verdier mottatt: {new_values}")
+
+    def closeEvent(self, event):
+        """Sørg for at tråden stoppes ryddig når vinduet lukkes."""
+        self.worker.stop()
+        event.accept()
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())

@@ -1,0 +1,132 @@
+import sys
+import serial
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
+    QWidget, QLabel, QPushButton
+)
+from PySide6.QtCore import QThread, Signal
+import pyqtgraph as pg
+
+class TISerialWorker(QThread):
+    # Sender en enkel flyttallsverdi videre til GUI-en
+    value_received = Signal(float)
+
+    def __init__(self, port="COM6", baudrate=115200):
+        super().__init__()
+        self.port = port
+        self.baudrate = baudrate
+        self.is_running = True
+
+    def run(self):
+        try:
+            ser = serial.Serial(self.port, self.baudrate, timeout=1)
+            print(f"Koblet til {self.port} med {self.baudrate} baud.")
+
+            while self.is_running:
+                line = ser.readline().decode('utf-8', errors='ignore').strip()
+                if line:
+                    try:
+                        # Gjør om linjen direkte til et flyttall
+                        val = float(line)
+                        self.value_received.emit(val)
+                    except ValueError:
+                        # Ignorer linjer som ikke er rene tall (f.eks. oppstartstekst)
+                        pass
+            ser.close()
+        except Exception as e:
+            print(f"Seriell kommunikasjonsfeil: {e}")
+
+    def stop(self):
+        self.is_running = False
+        self.wait()
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Sensor Dashboard - Flyttall")
+        self.resize(800, 500)
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+
+        # --- KONTROLLPANEL (START/STOPP & STATUS) ---
+        control_layout = QHBoxLayout()
+        
+        self.btn_toggle = QPushButton("Start Måling")
+        self.btn_toggle.setCheckable(True)
+        self.btn_toggle.setStyleSheet("background-color: #d4edda; font-weight: bold; padding: 8px; font-size: 14px;")
+        self.btn_toggle.clicked.connect(self.toggle_measurement)
+        control_layout.addWidget(self.btn_toggle)
+
+        self.status_label = QLabel("Status: Klar (Venter på start)")
+        self.status_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        control_layout.addWidget(self.status_label)
+        
+        layout.addLayout(control_layout)
+
+        # --- GRAF-WIDGET ---
+        self.plot_widget = pg.PlotWidget(title="Sanntidsdata (Flyttall)")
+        self.plot_widget.showGrid(x=True, y=True)
+        self.plot_widget.addLegend()
+        layout.addWidget(self.plot_widget)
+
+        # Opprett selve kurven
+        self.curve = self.plot_widget.plot(pen=pg.mkPen(color='c', width=2), name="Sensordata")
+
+        # Datalagring (rullende vindu)
+        self.max_len = 200
+        self.x_data = []
+        self.y_data = []
+        self.counter = 0
+
+        # Trådreferanse
+        self.worker = None
+
+    def toggle_measurement(self, checked):
+        """Starter eller stoppes målingen basert på knappens tilstand."""
+        if checked:
+            self.btn_toggle.setText("Stopp Måling")
+            self.btn_toggle.setStyleSheet("background-color: #f8d7da; font-weight: bold; padding: 8px; font-size: 14px;")
+            self.status_label.setText("Status: Kobler til...")
+            
+            # Start tråd 
+            self.worker = TISerialWorker(port="COM6", baudrate=115200)
+            self.worker.value_received.connect(self.handle_new_value)
+            self.worker.start()
+        else:
+            self.btn_toggle.setText("Start Måling")
+            self.btn_toggle.setStyleSheet("background-color: #d4edda; font-weight: bold; padding: 8px; font-size: 14px;")
+            self.status_label.setText("Status: Måling stoppet.")
+            
+            if self.worker:
+                self.worker.stop()
+                self.worker = None
+
+    def handle_new_value(self, value):
+        """Tar imot det nye flyttallet og oppdaterer grafen."""
+        self.counter += 1
+        self.x_data.append(self.counter)
+        self.y_data.append(value)
+
+        # Begrens historikken slik at grafen ruller pent
+        if len(self.x_data) > self.max_len:
+            self.x_data.pop(0)
+            self.y_data.pop(0)
+
+        # Oppdater grafen
+        self.curve.setData(self.x_data, self.y_data)
+        self.status_label.setText(f"Siste mottatte verdi: {value}")
+
+    def closeEvent(self, event):
+        """Sørg for at tråden lukkes ordentlig hvis vinduet lukkes."""
+        if self.worker:
+            self.worker.stop()
+        event.accept()
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())

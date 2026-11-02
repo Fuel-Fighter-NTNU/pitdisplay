@@ -1,0 +1,84 @@
+import sys
+import numpy as np
+from PySide6 import QtCore, QtWidgets
+import pyqtgraph as pg
+
+
+class MultiLiveDataWindow(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+
+        # 1. Opprett et sentralt hoved-widget og et layout for å holde flere grafer
+        central_widget = QtWidgets.QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QtWidgets.QVBoxLayout(central_widget)  # QVBoxLayout stabler vertikalt
+
+        # Vindusoppsett
+        self.setWindowTitle("Flerkanals Sanntidsdata - PyQtGraph")
+        self.resize(800, 700)
+
+        self.max_points = 100
+
+        # --- GRAF 1: Sinusbølge ---
+        self.pw1 = pg.PlotWidget(title="Akselerasjon")
+        self.pw1.showGrid(x=True, y=True)
+        self.pen1 = pg.mkPen(color=(255, 255, 0), width=2)  # Gul
+        self.line1 = self.pw1.plot([], [], pen=self.pen1)
+        layout.addWidget(self.pw1)
+
+        # --- GRAF 2: Firkantbølge / Puls ---
+        self.pw2 = pg.PlotWidget(title="Fart")
+        self.pw2.showGrid(x=True, y=True)
+        self.pen2 = pg.mkPen(color=(0, 255, 255), width=2)  # Cyan
+        self.line2 = self.pw2.plot([], [], pen=self.pen2)
+        layout.addWidget(self.pw2)
+
+        # --- GRAF 3: Cosinusbølge ---
+        self.pw3 = pg.PlotWidget(title="Temperatur")
+        self.pw3.showGrid(x=True, y=True)
+        self.pen3 = pg.mkPen(color=(255, 0, 128), width=2)  # Rosa
+        self.line3 = self.pw3.plot([], [], pen=self.pen3)
+        layout.addWidget(self.pw3)
+
+        # --- Data-buffere for hver strøm ---
+        self.x_data = list(range(self.max_points))
+        self.y1_data = [0.0] * self.max_points
+        self.y2_data = [0.0] * self.max_points
+        self.y3_data = [0.0] * self.max_points
+
+        # --- Timer for samlet oppdatering (50 ms = 20 FPS) ---
+        self.timer = QtCore.QTimer()
+        self.timer.setInterval(50)
+        self.timer.timeout.connect(self.update_data)
+        self.timer.start()
+
+    def update_data(self):
+        """Genererer nye verdier for alle tre strømmer og oppdaterer grafene."""
+        last_x = self.x_data[-1]
+
+        # Simuler 3 ulike innkommende datastrømmer
+        val1 = np.sin(last_x * 0.1) + np.random.normal(0, 0.05)
+        val2 = np.random.normal(0, 0.5)
+        val3 = np.cos(last_x * 0.05) * 2
+
+        # Roter data-bufferne
+        self.x_data.pop(0)
+        self.x_data.append(last_x + 1)
+
+        for y_data, val in zip(
+            [self.y1_data, self.y2_data, self.y3_data], [val1, val2, val3]
+        ):
+            y_data.pop(0)
+            y_data.append(val)
+
+        # Oppdater hver enkelt graf-linje
+        self.line1.setData(self.x_data, self.y1_data)
+        self.line2.setData(self.x_data, self.y2_data)
+        self.line3.setData(self.x_data, self.y3_data)
+
+
+if __name__ == "__main__":
+    app = QtWidgets.QApplication(sys.argv)
+    window = MultiLiveDataWindow()
+    window.show()
+    sys.exit(app.exec())
