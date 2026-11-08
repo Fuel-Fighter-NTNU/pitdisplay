@@ -34,8 +34,8 @@ class MultiLiveDataWindow(QtWidgets.QMainWindow):
         # --- GRAF-LAYOUT (Akselerasjon, Fart, Temperatur) ---
         self.max_points = 100
 
-        # Graf 1: Absolutt Akselerasjon
-        self.pw1 = pg.PlotWidget(title="Akselerasjon")
+        # Graf 1: Akselerasjon
+        self.pw1 = pg.PlotWidget(title="Akselerasjon (Absolutt)")
         self.pw1.showGrid(x=True, y=True)
         self.pen1 = pg.mkPen(color=(255, 255, 0), width=2)  # Gul
         self.line1 = self.pw1.plot([], [], pen=self.pen1)
@@ -56,10 +56,10 @@ class MultiLiveDataWindow(QtWidgets.QMainWindow):
         main_layout.addWidget(self.pw3)
 
         # --- Data-buffere for det rullende vinduet ---
-        self.x_data = list(range(self.max_points))
-        self.y_acc = [0.0] * self.max_points
-        self.y_fart = [0.0] * self.max_points
-        self.y_temp = [0.0] * self.max_points
+        self.x_data = []
+        self.y_acc = []
+        self.y_fart = [] 
+        self.y_temp = [] 
         self.counter = 0
 
         self.worker = None
@@ -71,9 +71,9 @@ class MultiLiveDataWindow(QtWidgets.QMainWindow):
             self.btn_toggle.setStyleSheet("background-color: #f8d7da; font-weight: bold; padding: 6px; font-size: 13px;")
             self.status_label.setText("Status: Kobler til COM6...")
             
-            # Starter tråden fra sensor_leser.py
-            self.worker = TISerialWorker(port="COM6", baudrate=115200)
-            self.worker.value_received.connect(self.handle_new_data)
+            # Starter tråden på COM6 fra sensor_leser.py
+            self.worker = TISerialWorker(port="COM6", baudrate=115200, simulate=True)
+            self.worker.values_received.connect(self.handle_new_data)
             self.worker.start()
         else:
             self.btn_toggle.setText("Start Måling")
@@ -84,21 +84,30 @@ class MultiLiveDataWindow(QtWidgets.QMainWindow):
                 self.worker.stop()
                 self.worker = None
 
-    def handle_new_data(self, value):
-        """Tar imot data fra tråden og oppdaterer grafene."""
+    def handle_new_data(self, acc, fart, temp):
+        """Tar imot de tre verdiene og oppdaterer hver sin graf i det rullende vinduet."""
         self.counter += 1
         
-        self.x_data.pop(0)
+        # Legg til nye verdier bakerst i listene
         self.x_data.append(self.counter)
+        self.y_acc.append(acc)
+        self.y_fart.append(fart)
+        self.y_temp.append(temp)
 
-        # Foreløpig sender vi verdien inn på akselerasjonsgrafen
-        self.y_acc.pop(0)
-        self.y_acc.append(value)
+        # Fjern det eldste elementet hvis vi har flere enn max_points (rullende vindu)
+        if len(self.x_data) > self.max_points:
+            self.x_data.pop(0)
+            self.y_acc.pop(0)
+            self.y_fart.pop(0)
+            self.y_temp.pop(0)
 
+        # Oppdater grafene
         self.line1.setData(self.x_data, self.y_acc)
-        # Her kan du senere oppdatere self.line2 og self.line3 når du henter fart og temperatur!
-        
-        self.status_label.setText(f"Mottar fra COM6 | Akselerasjon: {value}")
+        self.line2.setData(self.x_data, self.y_fart)
+        self.line3.setData(self.x_data, self.y_temp)
+
+        # Vis siste verdier i statusfeltet
+        self.status_label.setText(f"Mottar fra COM6 | Aks: {acc:.2f} | Fart: {fart:.2f} | Temp: {temp:.2f}")
 
     def closeEvent(self, event):
         if self.worker:
