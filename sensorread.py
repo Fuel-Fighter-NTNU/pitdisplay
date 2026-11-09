@@ -6,6 +6,73 @@ import serial
 from serial.tools import list_ports
 from PySide6 import QtCore
  
+# Juster etter sensorinnstillingen (se tabell for LIS3DH):
+# ±2 g i high-resolution (12 bit) = 1 mg per digit
+MG_PER_DIGIT = 1.0
+G = 9.81
+ 
+# --- Innstillinger for fartsberegning ---
+GRAVITY_TAU = 1.0     # s. Tyngdeestimat tilpasser seg raskt når sensoren er i ro
+GRAVITY_TAU_MOVING = 15.0  # s. ...og veldig tregt i bevegelse (ellers regnes akselerasjon som tyngde)
+LEAK_TAU = 10.0       # s. Fart "lekker" mot 0 for å begrense drift (stor = svakere effekt)
+STILL_THRESHOLD = 0.3 # m/s². Under dette regnes sensoren som i ro
+STILL_SAMPLES = 10    # Antall sammenhengende "i ro"-samples før farten nullstilles
+ 
+ 
+class SpeedEstimator:
+    """Anslår fart ved å integrere akselerasjon (x, y, z i m/s²) over tid.
+ 
+    Ikke nøyaktig: små feil summeres opp og gir drift. Mottiltak:
+    lekkasje mot 0 og nullstilling når sensoren ligger i ro.
+    """
+ 
+    def __init__(self):
+        self.reset()
+ 
+    def reset(self):
+        self.g = None          # estimert tyngdevektor
+        self.v = [0.0, 0.0, 0.0]
+        self.t_prev = None
+        self.still_count = 0
+ 
+    def update(self, t, ax, ay, az):
+        """Returnerer estimert fart (m/s) for ny måling ved tid t (s)."""
+        a = [ax, ay, az]
+ 
+        if self.g is None:
+            # Antar at vi starter i ro, så første måling = tyngdekraft
+            self.g = a[:]
+            self.t_prev = t
+            return 0.0
+ 
+        dt = t - self.t_prev
+        self.t_prev = t
+        if dt <= 0 or dt > 1.0:   # hopp over rare tidssteg (f.eks. etter pause)
+            return math.sqrt(sum(v * v for v in self.v))
+ 
+        # Lineær akselerasjon = målt minus estimert tyngde
+        lin = [ai - g for ai, g in zip(a, self.g)]
+        lin_mag = math.sqrt(sum(c * c for c in lin))
+ 
+        # Oppdater tyngdeestimat: raskt i ro, tregt i bevegelse
+        tau = GRAVITY_TAU if lin_mag < STILL_THRESHOLD else GRAVITY_TAU_MOVING
+        alpha = dt / (tau + dt)
+        self.g = [g + alpha * (ai - g) for g, ai in zip(self.g, a)]
+ 
+        # Stillstandsdeteksjon
+        if lin_mag < STILL_THRESHOLD:
+            self.still_count += 1
+        else:
+            self.still_count = 0
+ 
+        if self.still_count >= STILL_SAMPLES:
+            self.v = [0.0, 0.0, 0.0]
+        else:
+            leak = math.exp(-dt / LEAK_TAU)
+            self.v = [(v + c * dt) * leak for v, c in zip(self.v, lin)]
+ 
+        return math.sqrt(sum(v * v for v in self.v))
+ 
  
 def available_ports():
     """Returnerer en liste med navn på tilgjengelige serieporter (f.eks. COM6)."""
@@ -46,6 +113,7 @@ class TISerialWorker(QtCore.QThread):
  
     # ------------------------------------------------------------------
     def _run_serial(self, t0):
+        speed = SpeedEstimator()
         try:
             # Kort timeout slik at stop() reagerer raskt.
             # "with" sørger for at porten alltid lukkes, også ved feil.
@@ -63,13 +131,25 @@ class TISerialWorker(QtCore.QThread):
                         continue
  
                     try:
-                        acc = float(parts[0])
-                        fart = float(parts[1])
-                        temp = float(parts[2])
+                        x = float(parts[0])
+                        y = float(parts[1])
+                        z = float(parts[2])
                     except ValueError:
                         continue  # ødelagt/delvis linje, hopp over
  
-                    self.values_received.emit(time.monotonic() - t0, acc, fart, temp)
+                    # Konverter fra digits til m/s²
+                    scale = MG_PER_DIGIT / 1000 * G
+                    ax, ay, az = x * scale, y * scale, z * scale
+ 
+                    t = time.monotonic() - t0
+ 
+                    # Absoluttverdi av akselerasjonsvektoren, i m/s²
+                    acc = math.sqrt(ax * ax + ay * ay + az * az)
+ 
+                    # Estimert fart i m/s (temperatur er 0 inntil vi har data)
+                    fart = speed.update(t, ax, ay, az)
+ 
+                    self.values_received.emit(t, acc, fart, 0.0)
  
         except serial.SerialException as e:
             self.error.emit(f"Seriefeil på {self.port}: {e}")

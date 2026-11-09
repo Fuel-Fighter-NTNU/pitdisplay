@@ -6,7 +6,7 @@ from datetime import datetime
 import pyqtgraph as pg
 from PySide6 import QtGui, QtWidgets
  
-from sensor_leser import TISerialWorker, available_ports
+from sensorread import TISerialWorker, available_ports
  
 STYLE_START = "background-color: #d4edda; font-weight: bold; padding: 6px; font-size: 13px;"
 STYLE_STOP = "background-color: #f8d7da; font-weight: bold; padding: 6px; font-size: 13px;"
